@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+  Two core colors carry the whole interface: a warm paper/ink neutral pair.
+  The four layer colors are not decoration. They are the data encoding for OSI
+  layers 7/6/5/4, and the layer ladder is the one chart this product exists to
+  draw. A chart needs distinct series colors.
+*/
+:root {
+  --paper: #f7f5f0;
+  --surface: #ffffff;
+  --ink: #1c1a16;
+  --muted: #5e594f;
+  --line: #ded8cc;
+  --control-line: #8f8778;
+  --accent: #8a5a12;
+  --accent-ink: #ffffff;
+  --l7: #8a5a12;
+  --l6: #4c6b22;
+  --l5: #1f6b66;
+  --l4: #9b3d5c;
+  --danger: #a32b2b;
+}
+
+.dark {
+  --paper: #141310;
+  --surface: #1d1b17;
+  --ink: #ede9e1;
+  --muted: #a8a196;
+  --line: #33302a;
+  --control-line: #767061;
+  --accent: #e0a33e;
+  --accent-ink: #141310;
+  --l7: #e0a33e;
+  --l6: #8fb05a;
+  --l5: #5fa8a0;
+  --l4: #d07a93;
+  --danger: #e08585;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-control-line: var(--control-line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-l7: var(--l7);
+  --color-l6: var(--l6);
+  --color-l5: var(--l5);
+  --color-l4: var(--l4);
+  --color-danger: var(--danger);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  /*
+    Monospace is functional, not a "terminal" costume (R-06): hex dumps and
+    byte columns only line up under a fixed advance.
+  */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+  One focus ring, >=3:1 against both surfaces, on every interactive element.
+  Never removed without this replacement (R-32).
+*/
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* Scrollbars follow the theme instead of staying light inside a dark page. */
+* {
+  scrollbar-color: var(--control-line) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
