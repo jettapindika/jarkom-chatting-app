@@ -319,6 +319,92 @@ class TraceOrderTests(unittest.TestCase):
         self.assertIn(b"BROADCAST", inner)
 
 
+class ClientSessionConcurrencyTests(unittest.TestCase):
+    """Threads sharing one ClientSession must not share sequence numbers.
+
+    The CLI's reader thread answers PING with PONG while the main thread sends
+    chat traffic. ``build_outbound`` reads and increments the sequence counter
+    in separate bytecodes, so without serialisation inside
+    ``ClientSession.send`` two threads can interleave and emit two frames
+    carrying the same sequence number -- violating the monotonic-sequencing
+    invariant the session layer exists to enforce. The race is probabilistic
+    (verified to fire within a few runs when the lock is removed), which is
+    why the thread count and message count are generous.
+    """
+
+    def test_concurrent_sends_produce_unique_monotonic_sequences(self) -> None:
+        import sys
+        import threading
+
+        from presentation import make_message as build
+        from session.client_session import ClientSession
+        from session.envelope import decode_envelope
+
+        # The lost-update window in an unlocked build_outbound is a few
+        # bytecodes wide; CPython's default 5 ms switch interval almost never
+        # preempts inside it. Forcing a 1 us interval makes the race fire
+        # reliably without the lock (verified: fails 6/6 runs unlocked, passes
+        # with it), so the test discriminates instead of vacuously passing.
+        previous_interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        self.addCleanup(sys.setswitchinterval, previous_interval)
+
+        # The channel records the sequence of every frame handed to it. That
+        # hand-off happens inside ClientSession's send lock, so the recording
+        # sees exactly what went on the wire, one entry per frame.
+        sequences: list[int] = []
+        record_lock = threading.Lock()
+
+        class RecordingChannel:
+            emitter = None
+
+            def __init__(self) -> None:
+                self._closed = False
+
+            @property
+            def is_closed(self) -> bool:
+                return self._closed
+
+            def send_frame(self, payload: bytes, *, trace_id: str | None = None) -> None:
+                header, _ = decode_envelope(payload)
+                with record_lock:
+                    sequences.append(header.sequence)
+
+            def close(self) -> None:
+                self._closed = True
+
+        session = ClientSession(RecordingChannel(), nickname="budi")  # type: ignore[arg-type]
+        session.core.open("11111111-1111-1111-1111-111111111111")
+
+        errors: list[Exception] = []
+        messages_per_thread = 500
+
+        def sender(tag: str) -> None:
+            try:
+                for index in range(messages_per_thread):
+                    session.send(
+                        build(MessageType.BROADCAST, {"text": f"{tag}-{index}"}, sender="budi")
+                    )
+            except Exception as exc:  # noqa: BLE001 - surfaced by the assertion below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=sender, args=(f"t{i}",)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        self.assertEqual(errors, [])
+        total = 8 * messages_per_thread
+        self.assertEqual(len(sequences), total)
+        # The invariant a sequence number exists to uphold: no duplicates, no
+        # gaps. Without the send lock two threads can read-increment-write the
+        # counter interleaved and emit the same number twice.
+        self.assertEqual(len(set(sequences)), total, "duplicate sequence numbers were sent")
+        self.assertEqual(sorted(sequences), list(range(1, total + 1)))
+        self.assertEqual(session.core.next_sequence, total + 1)
+
+
 def _inbound(sequence: int, message_type: MessageType) -> bytes:
     """Build a session envelope as an inbound PDU with the given sequence."""
     from presentation import encode

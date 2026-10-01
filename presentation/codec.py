@@ -87,10 +87,12 @@ def encode(
 
     try:
         text = json.dumps(serialisable, ensure_ascii=False, separators=(",", ":"))
+        data = text.encode("utf-8")
     except (TypeError, ValueError) as exc:
+        # ``UnicodeEncodeError`` is a ``ValueError``: a lone surrogate sails
+        # through ``json.dumps`` yet cannot be encoded as UTF-8, and it must
+        # surface as the documented ``EncodeError`` rather than a raw crash.
         raise EncodeError(f"message is not JSON-serialisable: {exc}") from exc
-
-    data = text.encode("utf-8")
 
     if emitter is not None:
         emitter.emit(
@@ -135,6 +137,11 @@ def decode(
         raw = json.loads(text)
     except json.JSONDecodeError as exc:
         raise CodecError(f"payload is not valid JSON: {exc.msg} at offset {exc.pos}") from exc
+    except RecursionError as exc:
+        # A hostile frame of deeply nested brackets drives the JSON parser past
+        # CPython's recursion limit. That is a malformed frame like any other
+        # and belongs in the server's malformed budget, not in a crash.
+        raise CodecError("payload is not valid JSON: nesting too deep") from exc
 
     message = validate_message(raw)
 

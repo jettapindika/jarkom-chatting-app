@@ -22,7 +22,7 @@ Daftar isi:
 
 | Area | Cakupan | Hasil |
 | --- | --- | --- |
-| Unit test otomatis | 261 pengujian, 11 modul | Lulus semua |
+| Unit test otomatis | 272 pengujian, 12 modul | Lulus semua |
 | Skenario manual | 7 skenario, 10 pemeriksaan | 10/10 lulus |
 | Stress test | 50 klien bersamaan | 50/50 terhubung, 0 gagal |
 | Verifikasi byte | 4 tipe frame di kabel | Sesuai spesifikasi |
@@ -70,7 +70,7 @@ kegagalan test, bukan sekadar peringatan yang lewat.
 Hasil lengkap:
 
 ```
-Ran 261 tests in 1.597s
+Ran 272 tests in 3.752s
 
 OK
 ```
@@ -80,17 +80,18 @@ Rincian per modul:
 | Modul | Jumlah | Yang diuji |
 | --- | --- | --- |
 | `test_framing` | 24 | Encode dan decode length-prefix, batas 64 KiB, frame terpotong |
-| `test_presentation` | 31 | JSON, validasi skema, setiap kode error, payload rusak |
-| `test_session` | 30 | Identitas sesi, nomor urut PDU, deteksi urutan salah, heartbeat |
+| `test_presentation` | 34 | JSON, validasi skema, setiap kode error, payload rusak, surrogate terisolasi, nesting dalam |
+| `test_session` | 31 | Identitas sesi, nomor urut PDU, deteksi urutan salah, heartbeat, keunikan nomor urut saat kirim konkuren |
 | `test_channel` | 26 | Baca tulis byte stream, partial read, timeout, penutupan |
-| `test_server` | 30 | Registry, broadcast, pesan pribadi, jalur error, shutdown |
+| `test_server` | 34 | Registry, broadcast, pesan pribadi, jalur error, shutdown, heartbeat server, timestamp roster, reader idle tapi hidup |
 | `test_stack` | 20 | Keempat lapisan dirangkai, urutan peristiwa L4 sampai L7 |
 | `test_trace` | 30 | Emitter, sink, urutan peristiwa per arah |
 | `test_websocket` | 19 | Handshake RFC 6455, framing, masking, frame terpecah |
 | `test_handshake` | 18 | CONNECT, CONNECT_OK, CONNECT_ERR, penolakan nickname |
 | `test_registry` | 17 | Daftar user aktif, penambahan, pelepasan nama |
+| `test_receiver` | 3 | Reader thread: server diam vs mati (probe, expiry, stop bersih) |
 | `test_bridge` | 16 | Kontrak browser ke bridge, penerjemahan pesan |
-| **Total** | **261** | |
+| **Total** | **272** | |
 
 ### Cakupan edge case yang diuji
 
@@ -429,16 +430,78 @@ README menuju berkas yang tidak ada.
 
 **Perbaikan.** Kedua dokumen ditulis. Laporan ini adalah salah satunya.
 
-### 9.3 Ringkasan temuan lain
+### 9.3 Broadcast berisi surrogate terisolasi mematikan semua writer
+
+**Gejala.** Satu `BROADCAST` yang teksnya berisi surrogate terisolasi
+(`"\ud800"`) membuat semua klien senyap secara permanen: koneksi tetap
+terdaftar di roster dan `USER_LIST` tetap menampilkan mereka, tetapi tidak ada
+satu frame pun yang terkirim lagi ke klien mana pun. Log server memuat
+`UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800'` dari
+`presentation/codec.py`.
+
+**Dampak.** Pesan itu valid JSON dan lolos semua pemeriksaan `isinstance`,
+sehingga masuk ke queue outbound **setiap** koneksi. `json.dumps` menerimanya,
+tetapi `text.encode("utf-8")` melempar `UnicodeEncodeError` yang bukan subclass
+`EncodeError`, sehingga ditangkap `except Exception` di `_writer_loop` sebagai
+kegagalan fatal -- writer task setiap koneksi exit permanen. Satu pesan dari
+satu pengguna = seluruh chat membisu, tanpa jejak di sisi klien.
+
+**Diagnosis.** Probe dua klien dengan socket mentah: broadcast normal sampai,
+kirim broadcast surrogate, broadcast normal berikutnya tidak sampai ke siapa
+pun, roster masih memuat semua klien (koneksi zombie), proses server tetap hidup.
+
+**Perbaikan.** Tiga lapis: (1) `extract_text` menolak teks yang tidak dapat
+diwakili dalam UTF-8 sebagai `SchemaViolation` biasa sehingga penyerang dijawab
+`ERROR MALFORMED`; (2) `.encode("utf-8")` di `codec.encode` masuk ke blok `try`
+sehingga pelanggaran kontrak docstring ("Raises: EncodeError") tertutup;
+(3) `_writer_loop` melewati pesan yang gagal dibangun (skip + log) alih-alih
+`return` yang meninggalkan koneksi zombie -- sejajar dengan cabang
+`FrameTooLargeError`-nya.
+
+**Verifikasi perbaikan.** Regresi
+`test_lone_surrogate_text_is_rejected_without_killing_the_writer` mengirim frame
+escape JSON `"\ud800"` lewat socket mentah dengan session id hasil handshake.
+Dibuktikan gagal (`ERROR` tak pernah sampai, writer mati) pada kode sebelum
+perbaikan dan lulus sesudahnya: penyerang menerima `ERROR MALFORMED`, broadcast
+berikutnya tetap sampai ke semua klien.
+
+### 9.4 Reader client keluar dengan heartbeat timeout palsu
+
+**Gejala.** CLI client yang tidak menerima pesan selama satu interval heartbeat
+(bawaan 15 detik) keluar dengan pesan "server tidak merespons (heartbeat
+timeout)" padahal server hidup dan sehat.
+
+**Dampak.** Setiap sesi yang senyap -- pengguna membaca saja tanpa mengetik --
+terputus palsu setiap 15 detik. `ping_due()` di bawahnya tidak pernah tercapai,
+jadi client tidak pernah menyelidiki server yang diam.
+
+**Diagnosis.** `client/receiver.py` menguji
+`self._session.core.heartbeat.peer_expired` tanpa memanggilnya: itu objek
+bound method, yang selalu truthy, sehingga setiap `TransportTimeout` pertama
+langsung dianggap kedaluwarsa.
+
+**Perbaikan.** Satu karakter: `peer_expired()`. Dilengkapi unit test
+`tests/test_receiver.py` dengan fake session (tanpa jaringan) yang menguji
+tiga keputusan reader: server diam -> PING dan tetap hidup, server mati ->
+keluar dengan alasan, stop manual -> keluar bersih tanpa alasan.
+
+**Verifikasi perbaikan.** Kedua test pertama dibuktikan gagal pada kode lama
+(dengan bug, reader berhenti di poll pertama tanpa pernah mengirim PING:
+`probes == 0`) dan lulus pada kode baru. Diverifikasi tambahan secara
+end-to-end: receiver idle 2 detik pada server hidup tetap terhubung.
+
+### 9.5 Ringkasan temuan lain
 
 | Temuan | Sifat | Tindakan |
 | --- | --- | --- |
 | Farewell hilang pada jalur `Ctrl+C` | Bug nyata | Diperbaiki, dikunci dengan test regresi |
+| Broadcast surrogate mematikan semua writer | Bug nyata | Diperbaiki tiga lapis, dikunci dengan test regresi (9.3) |
+| Reader client keluar dengan heartbeat timeout palsu | Bug nyata | Diperbaiki, dikunci dengan test regresi (9.4) |
 | Dua dokumen yang ditautkan README belum ada | Kelengkapan | Ditulis |
 | Jejak lapisan inbound berhenti di L6 | Disengaja | Dibiarkan, dijelaskan di README |
 | Empat lapisan saja yang muncul di visualizer | Disengaja | Dibiarkan, dijelaskan di [OSI.md](OSI.md) |
 
-Baris ketiga dan keempat bukan bug. L7 di sisi penerima dikerjakan oleh pemakai
+Dua baris terakhir bukan bug. L7 di sisi penerima dikerjakan oleh pemakai
 stack, bukan oleh `SessionCore`, jadi tidak ada yang bisa dilaporkan tanpa
 mengarang data. L3 sampai L1 dipegang sistem operasi dan kartu jaringan, jadi
 yang bisa ditunjukkan hanyalah tangkapan paket.
@@ -458,9 +521,10 @@ sebenarnya.
   tidak ada klien yang tertinggal, tetapi bukan uji ketahanan pada beban tinggi.
 - **Pelepasan nickname bergantung pada heartbeat.** Koneksi yang mati tanpa
   mengirim apa pun baru dilepas setelah sekitar tiga kali interval heartbeat,
-  yaitu sekitar 45 detik dengan pengaturan bawaan. Yang diuji di
-  [bagian 7.2](#72-nickname-dilepas-saat-koneksi-putus) adalah jalur cepat, yaitu
-  koneksi yang benar-benar terdeteksi putus.
+  yaitu sekitar 45 detik dengan pengaturan bawaan. Enforce heartbeat sisi
+  server diuji otomatis di `test_server` (PING lalu `HEARTBEAT_TIMEOUT`
+  dengan policy dipercepat), sedangkan [bagian 7.2](#72-nickname-dilepas-saat-koneksi-putus)
+  menguji jalur cepat, yaitu koneksi yang benar-benar terdeteksi putus.
 - **Tidak ada pengujian lintas mesin.** Pengujian dengan server dan klien di
   komputer yang berbeda belum dilakukan.
 - **Verifikasi visual terbatas pada dua halaman.** Halaman `/` dan `/visualizer`

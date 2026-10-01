@@ -220,7 +220,7 @@ Semua kode berasal dari `ErrorCode` dan dikirim di dalam `payload.code`, baik pa
 | `TEXT_TOO_LONG` | `ERROR` | Isi obrolan melebihi `MAX_TEXT_LENGTH` |
 | `NO_SUCH_USER` | `ERROR` | Pesan pribadi dialamatkan ke nickname yang tidak online |
 | `NOT_AUTHENTICATED` | `ERROR` | Trafik obrolan tiba sebelum sesi terautentikasi |
-| `INTERNAL` | tidak pernah dikirim | Terdefinisi, tetapi tidak ada pemanggil yang menghasilkannya |
+| `HEARTBEAT_TIMEOUT` | `ERROR` | Tidak ada trafik masuk dalam batas waktu heartbeat; koneksi ditutup setelah pesan ini dikirim |
 
 Dua kode yang ditandai "tidak pernah dikirim" sengaja dicatat apa adanya, karena menyatakan sebaliknya akan menjadi klaim palsu. `SERVER_FULL` tidak pernah melintas di kabel: server menolak koneksi yang melebihi `max_clients` dengan membatalkan socket di `_on_client`, sebelum ada handshake yang bisa dijawab. Kode itu tetap terdefinisi dan dipetakan ke teks nasihat di `client/connection.py`, tetapi jalur pembatalan socket tidak mengirim pesan apa pun. `INTERNAL` juga tidak punya pemancar di `server/`.
 
@@ -435,7 +435,7 @@ TCP tidak memberi tahu dengan cepat bahwa peer sudah hilang. Bila sebuah mesin k
 
 Kebijakan bawaan adalah `DEFAULT_HEARTBEAT_INTERVAL = 15.0` detik dan `DEFAULT_HEARTBEAT_TIMEOUT = 45.0` detik. Timeout sengaja tiga kali interval supaya dua PING berturut-turut boleh hilang sebelum koneksi dibongkar. Pada entry point client dan server, timeout diturunkan dari interval yang dikonfigurasi lewat `HEARTBEAT_TIMEOUT_FACTOR = 3.0`, sehingga mengubah interval juga menggeser batas waktunya secara proporsional.
 
-Arah probingnya perlu dinyatakan dengan tegas: **client yang mengirim PING, server yang menjawab PONG**. Tidak ada loop di sisi server yang memancarkan PING sendiri.
+Arah probingnya simetris: **kedua sisi boleh mengirim PING**, dan masing-masing menjawab dengan PONG. Client menyelidiki server yang diam; server menyelidiki client yang diam dengan mekanisme yang sama.
 
 ```mermaid
 sequenceDiagram
@@ -447,12 +447,17 @@ sequenceDiagram
     S->>C: PONG sender=server
     Note over C: jam liveness di-reset oleh frame yang masuk
     Note over C: bila timeout terlampaui, sesi dinyatakan mati
+
+    Note over S: tidak ada trafik masuk selama interval
+    S->>C: PING sender=server
+    C->>S: PONG
+    Note over S: bila timeout terlampaui, server mengirim ERROR HEARTBEAT_TIMEOUT lalu menutup koneksi
 ```
 
 Rinciannya di kedua sisi:
 
 - **Client.** Reader thread melakukan polling dengan timeout sepanjang `interval`. Saat timeout habis, ia memeriksa `peer_expired` lebih dulu; bila sudah lewat batas, sesi dinyatakan mati dan thread berhenti dengan alasan "server tidak merespons". Bila belum, ia memeriksa `ping_due` dan mengirim satu PING. Monitor mencatat waktu trafik keluar dan trafik masuk secara terpisah, sehingga PING dikirim berdasarkan lamanya diam keluar dan peer dinyatakan mati berdasarkan lamanya diam masuk.
-- **Server.** `_dispatch` menjawab setiap `PING` dengan `PONG` kosong dan pengirim `"server"`. Server memang memiliki `HeartbeatPolicy` pada `ServerConfig` dan `HeartbeatMonitor` di dalam `SessionCore`, tetapi reader loop-nya menunggu frame tanpa batas waktu, sehingga server tidak memutus koneksi karena heartbeat kedaluwarsa; koneksi berakhir ketika socket tertutup atau ketika frame tidak dapat diproses.
+- **Server.** Reader loop setiap koneksi membundarkan pembacaan dengan `interval` dari `HeartbeatPolicy`, sama seperti reader thread milik client. Saat timeout habis, ia memeriksa `peer_expired` lebih dulu; bila sudah lewat batas, server mengirim `ERROR` dengan kode `HEARTBEAT_TIMEOUT` lalu menutup koneksi dan melepas nickname. Bila belum, ia memeriksa `ping_due` dan mengirim satu `PING`. `_dispatch` juga menjawab setiap `PING` yang masuk dengan `PONG` kosong dan pengirim `"server"`, serta menerima `PONG` tanpa balasan (monitor tersentuh saat frame diparse).
 - **Client saat menerima PING.** `ClientSession.receive` menjawab `PING` yang masuk dengan `PONG` secara otomatis dan tidak meneruskannya ke pemanggil. Heartbeat adalah urusan lapisan sesi, dan lapisan aplikasi yang harus tahu soal itu berarti abstraksinya bocor.
 
 Bridge memakai kebijakan yang sama dengan faktor timeout yang sama, sehingga kedua ujungnya memberi waktu pada jadwal yang seragam dan sebuah demo tidak berakhir dengan satu pihak masih mengira pihak lain ada.

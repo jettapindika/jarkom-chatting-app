@@ -67,6 +67,10 @@ class ErrorCode(str, Enum):
     #: Chat traffic arrived before the handshake completed.
     NOT_AUTHENTICATED = "NOT_AUTHENTICATED"
 
+    #: The peer produced no inbound traffic within the heartbeat timeout, so
+    #: the server considers it gone and is closing the connection.
+    HEARTBEAT_TIMEOUT = "HEARTBEAT_TIMEOUT"
+
     #: The server hit an unexpected fault while handling this message. The
     #: connection survives; the server log has the traceback.
     INTERNAL = "INTERNAL"

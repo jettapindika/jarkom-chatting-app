@@ -410,6 +410,7 @@ Pesan error dari server selalu diawali `*** error [KODE]`. Berikut artinya:
 | `UNEXPECTED_TYPE` | Tipe pesan dikirim pada saat yang salah, misalnya pesan biasa sebelum handshake | Biasanya bug |
 | `UNKNOWN_TYPE` | Tipe pesan tidak dikenal server | Biasanya bug |
 | `NOT_AUTHENTICATED` | Ada pesan dikirim sebelum handshake selesai | Biasanya bug |
+| `HEARTBEAT_TIMEOUT` | Tidak ada aktivitas apa pun sampai batas waktu heartbeat (bawaan 45 detik) | Koneksi ditutup otomatis; sambung ulang bila masih ingin chat |
 
 Teks setelah kode berasal dari server dan tidak diterjemahkan, jadi isinya
 bahasa Inggris. Kode itu sendiri yang stabil untuk dipakai bercabang.

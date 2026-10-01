@@ -257,12 +257,19 @@ class SessionCore:
             return trace_id
 
         text = json.dumps(_jsonable(message), ensure_ascii=False, separators=(",", ":"))
+        try:
+            wire = text.encode("utf-8")
+        except UnicodeEncodeError:
+            # A lone surrogate is representable in JSON and in a Python str but
+            # not in UTF-8. Encoding the trace event must not crash before the
+            # codec below reports the same condition as a protocol EncodeError.
+            wire = text.encode("utf-8", "backslashreplace")
         return self._emitter.emit(
             layer=Layer.APPLICATION,
             direction=Direction.OUTBOUND,
             summary=summary or summarize(message),
             trace_id=trace_id,
-            payload=text.encode("utf-8"),
+            payload=wire,
             preview=text,
         )
 

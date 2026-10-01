@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import socket
 import threading
 import time
@@ -29,14 +30,23 @@ from session import (
     build_connect,
     encode_envelope,
 )
+from session.heartbeat import HeartbeatPolicy
 from transport import BlockingTcpChannel, encode_frame
 
 
 class ServerTestCase(unittest.TestCase):
     """A real ``ChatServer`` on a private event loop, one per test."""
 
+    def make_config(self) -> ServerConfig:
+        """Server configuration for this test case.
+
+        A hook rather than a constant: subclasses with a fast heartbeat policy
+        or a smaller queue override only this, and inherit the whole harness.
+        """
+        return ServerConfig(host="127.0.0.1", port=0, handshake_timeout=5.0)
+
     def setUp(self) -> None:
-        self.server = ChatServer(ServerConfig(host="127.0.0.1", port=0, handshake_timeout=5.0))
+        self.server = ChatServer(self.make_config())
         self.clients: list[ClientSession] = []
         self._raw: socket.socket | None = None
 
@@ -268,15 +278,165 @@ class MessagingTests(ServerTestCase):
         message = self.next_of_type(budi, MessageType.PRIVATE)
         self.assertEqual(message["payload"]["text"], "catatan")
 
-    def test_user_list_reflects_the_current_roster(self) -> None:
+    def test_user_list_carries_a_join_timestamp(self) -> None:
+        budi = self.connect("budi", drain=False)
+
+        roster = budi.receive(timeout=5)[1]
+
+        self.assertIs(roster["type"], MessageType.USER_LIST)
+        entry = roster["payload"]["users"][0]
+        self.assertEqual(entry["nick"], "budi")
+        # The wire contract (PROTOCOL.md) documents ``joined_at`` as an ISO-8601
+        # timestamp; it must never ship empty.
+        self.assertRegex(entry["joined_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+    def test_lone_surrogate_text_is_rejected_without_killing_the_writer(self) -> None:
+        """A crafted BROADCAST must not mute every client's outbound path.
+
+        ``"\\ud800"`` is valid JSON and passes every isinstance check, yet
+        cannot be encoded as UTF-8. Before the fix it sailed into every
+        connection's writer queue and killed each writer task with a raw
+        UnicodeEncodeError, leaving zombie connections that never delivered
+        another frame.
+        """
         budi = self.connect("budi")
-        self.connect("sari")
+        sari = self.connect("sari")
         self.next_of_type(budi, MessageType.USER_JOIN)
 
-        budi.send(make_message(MessageType.USER_LIST, {}, sender="budi"))
+        # A real client refuses to encode this locally (the codec raises
+        # EncodeError at the sender), so drive the server with a raw socket --
+        # the only honest way to test what a hostile peer can do. The JSON
+        # escape "\ud800" decodes to a lone surrogate on the server; the raw
+        # three-byte form would be rejected as invalid UTF-8 before that.
+        sock = self.raw_socket()
+        _session_id, sock_seq = _handshake_raw(sock, "penyerang")
 
-        roster = self.next_of_type(budi, MessageType.USER_LIST)
-        self.assertEqual([entry["nick"] for entry in roster["payload"]["users"]], ["budi", "sari"])
+        # The frame carries the escape form: literal ASCII "\ud800" inside the
+        # JSON text, which the server's json.loads turns back into a lone
+        # surrogate string. The raw three-byte surrogate form would be
+        # rejected as invalid UTF-8 before ever reaching extract_text.
+        evil = json.dumps(
+            make_message(MessageType.BROADCAST, {"text": "\ud800x"}, sender="penyerang")
+        ).encode()
+        sock.sendall(_frame_with_session(evil, session_id=_session_id, sequence=sock_seq))
+
+        # The rejection goes to the attacker, not the room.
+        reply = _decode(_recv_frame(sock))
+        self.assertIs(reply["type"], MessageType.ERROR)
+        self.assertEqual(reply["payload"]["code"], "MALFORMED")
+
+        # The writers survive: a later broadcast still reaches everyone.
+        budi.send(make_message(MessageType.BROADCAST, {"text": "masih hidup"}, sender="budi"))
+        self.assertEqual(
+            self.next_of_type(sari, MessageType.BROADCAST)["payload"]["text"], "masih hidup"
+        )
+        self.assertEqual(
+            self.next_of_type(budi, MessageType.BROADCAST)["payload"]["text"], "masih hidup"
+        )
+        self.assertEqual(self.server.client_count, 3)
+
+class HeartbeatTests(ServerTestCase):
+    """Server-side liveness: a silent peer must not hold a slot forever."""
+
+    def make_config(self) -> ServerConfig:
+        # A fast policy keeps the test quick; the CLI-default policy would
+        # need 45 s of silence to expire.
+        return ServerConfig(
+            host="127.0.0.1",
+            port=0,
+            handshake_timeout=5.0,
+            heartbeat=HeartbeatPolicy(interval=0.2, timeout=0.6),
+        )
+
+    def test_a_silent_peer_is_pinged_and_stays_alive_when_answering(self) -> None:
+        # The ClientSession answers PING inside receive(), so "the session
+        # stays alive" is observable as chat traffic still flowing after the
+        # server has been probing. The wait stays under the 0.6 s expiry: the
+        # test thread is the only reader, so while it sleeps nobody answers
+        # the probe.
+        budi = self.connect("budi")
+        time.sleep(0.4)  # one probe cycle (interval 0.2 s), under the timeout
+
+        budi.send(make_message(MessageType.BROADCAST, {"text": "masih hidup"}, sender="budi"))
+
+        self.assertEqual(
+            self.next_of_type(budi, MessageType.BROADCAST)["payload"]["text"], "masih hidup"
+        )
+        self.assertEqual(self.server.client_count, 1)
+
+    def test_an_idle_but_alive_client_survives_past_one_poll_timeout(self) -> None:
+        """Regression: the reader must not mistake "server quiet" for "server gone".
+
+        ``Receiver.run`` used to test ``heartbeat.peer_expired`` without
+        calling it -- a bound method object, always truthy -- so the very
+        first quiet poll ended the session with a bogus heartbeat timeout.
+        Here the server is alive but says nothing: the reader must still be
+        running after several poll intervals, and must exit cleanly once
+        asked to stop.
+        """
+        from client.receiver import Receiver
+
+        budi = self.connect("budi")
+        reasons: list[str | None] = []
+        finished = threading.Event()
+
+        receiver = Receiver(
+            budi,
+            on_message=lambda message: None,  # the server is quiet on purpose
+            on_finish=lambda reason: (reasons.append(reason), finished.set()),
+            policy=HeartbeatPolicy(interval=0.2, timeout=0.6),
+        )
+        receiver.start()
+
+        # Several poll intervals of silence from a live server. Pre-fix, the
+        # reader declared the server dead on the first one.
+        self.assertFalse(finished.wait(0.6), "reader stopped while the server was merely quiet")
+        receiver.stop()
+        receiver.join(timeout=5)
+        self.assertTrue(finished.wait(1.0))
+        self.assertIsNone(reasons[0])
+        # The session itself was never torn down.
+        self.assertTrue(budi.core.is_active)
+
+    def test_a_peer_that_never_answers_is_expired_and_forgotten(self) -> None:
+        # A raw socket speaks the handshake but then goes silent: no PONG,
+        # nothing. The server must first probe (PING), then evict (ERROR
+        # HEARTBEAT_TIMEOUT), and the roster slot must come back free.
+        sock = self.raw_socket()
+        sock.sendall(_frame(encode(build_connect("hantu")), sequence=1))
+        _recv_frame(sock)  # CONNECT_OK
+        _recv_frame(sock)  # USER_LIST
+
+        sock.settimeout(5)
+        saw_ping = False
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                payload = _recv_frame(sock)
+            except socket.timeout:
+                continue
+            except ConnectionError:
+                # The server tearing the socket down is the eviction itself.
+                break
+            if payload is None or payload == b"":
+                break
+            message = _decode(payload)
+            if message["type"] is MessageType.PING:
+                saw_ping = True
+                continue
+            if message["type"] is MessageType.ERROR:
+                break
+        else:
+            self.fail("the silent peer was never evicted within 5s")
+
+        # The probe came before the verdict: expiry only fires after the
+        # server has tried asking.
+        self.assertTrue(saw_ping, "the server expired the peer without ever sending PING")
+
+        # The roster slot is freed: a new client may claim the nickname.
+        self.connect("hantu")
+        self.assertEqual(self.server.client_count, 1)
+
 
 
 class RenameTests(ServerTestCase):
@@ -482,6 +642,26 @@ def _frame(payload: bytes, *, sequence: int) -> bytes:
     return encode_frame(
         encode_envelope(payload, session_id=UNASSIGNED_SESSION_ID, sequence=sequence)
     )
+
+
+def _frame_with_session(payload: bytes, *, session_id: str, sequence: int) -> bytes:
+    """Frame ``payload`` with a specific session id, post-handshake."""
+    return encode_frame(encode_envelope(payload, session_id=session_id, sequence=sequence))
+
+
+def _handshake_raw(sock: socket.socket, nickname: str) -> tuple[str, int]:
+    """Run the raw-socket CONNECT and return ``(session_id, next_sequence)``.
+
+    Reads past the CONNECT_OK and the roster that follows it, so the caller
+    can start sending authenticated frames immediately.
+    """
+    import uuid as uuid_module
+
+    sock.sendall(_frame(encode(build_connect(nickname)), sequence=1))
+    connect_ok = _recv_frame(sock)
+    _recv_frame(sock)  # the USER_LIST sent alongside CONNECT_OK
+    session_id = str(uuid_module.UUID(bytes=connect_ok[:16]))
+    return session_id, 2
 
 
 def _recv_frame(sock: socket.socket) -> bytes:

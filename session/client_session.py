@@ -13,6 +13,7 @@ gained from an event loop and a good deal of clarity to be lost.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from presentation import MessageType, make_message
@@ -29,7 +30,7 @@ __all__ = ["ClientSession"]
 class ClientSession:
     """A client-side chat session over a blocking TCP channel."""
 
-    __slots__ = ("_channel", "_core", "_emitter", "_nickname")
+    __slots__ = ("_channel", "_core", "_emitter", "_nickname", "_send_lock")
 
     def __init__(
         self,
@@ -47,6 +48,14 @@ class ClientSession:
         # no trace: it looks complete while hiding every layer above transport.
         self._emitter = emitter if emitter is not None else channel.emitter
         self._core = SessionCore(emitter=self._emitter, heartbeat=heartbeat)
+        # The reader thread answers PING with PONG while the main thread sends
+        # chat traffic, so the whole build-and-send critical section -- not just
+        # the socket write, which the channel already serialises -- must run
+        # under one lock. Otherwise the two threads can interleave inside
+        # ``build_outbound`` and emit two frames carrying the same sequence
+        # number, breaking the monotonic-sequencing invariant the session layer
+        # exists to enforce.
+        self._send_lock = threading.Lock()
 
     @property
     def core(self) -> SessionCore:
@@ -142,8 +151,9 @@ class ClientSession:
         if require_active:
             self._core.require_active("send chat traffic")
 
-        trace_id, payload = self._core.build_outbound(message, summary=summary)
-        self._channel.send_frame(payload, trace_id=trace_id)
+        with self._send_lock:
+            trace_id, payload = self._core.build_outbound(message, summary=summary)
+            self._channel.send_frame(payload, trace_id=trace_id)
         return trace_id
 
     def receive(self, *, timeout: float | None = None) -> tuple[Any, dict[str, Any]]:

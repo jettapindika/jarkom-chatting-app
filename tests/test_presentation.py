@@ -8,6 +8,7 @@ import unittest
 from presentation import (
     MAX_TEXT_LENGTH,
     CodecError,
+    EncodeError,
     MessageType,
     SchemaViolation,
     decode,
@@ -234,6 +235,35 @@ class ExtractTextTests(unittest.TestCase):
         with self.assertRaises(SchemaViolation):
             extract_text({"text": "a" * (MAX_TEXT_LENGTH + 1)})
 
+    def test_rejects_lone_surrogates(self) -> None:
+        # ``"\ud800"`` is a str, non-empty, printable-ish, and passes every
+        # isinstance check -- yet UTF-8, the wire encoding, cannot represent
+        # it. It must be rejected here rather than crash the encoder later.
+        # A JSON escape from a peer is the realistic delivery path.
+        with self.assertRaises(SchemaViolation):
+            extract_text(json.loads('{"text": "\\ud800x"}'))
+
+
+class CodecEdgeCaseTests(unittest.TestCase):
+    """Encode/decode failures that must surface as protocol errors."""
+
+    def test_encode_reports_unencodable_text_as_encode_error(self) -> None:
+        # The docstring contract: encode raises EncodeError, never a raw
+        # UnicodeEncodeError, for anything JSON accepts but UTF-8 cannot carry.
+        message = {
+            "type": "BROADCAST",
+            "sender": "a",
+            "payload": {"text": "\ud800"},
+            "timestamp": "2026-10-01T00:00:00.000Z",
+        }
+        with self.assertRaises(EncodeError):
+            encode(message)
+
+    def test_decode_reports_deep_nesting_as_codec_error(self) -> None:
+        # A hostile frame of opening brackets drives the JSON parser past
+        # CPython's recursion limit; that is a malformed frame like any other.
+        with self.assertRaises(CodecError):
+            decode(b"[" * 300_000)
 
 if __name__ == "__main__":
     unittest.main()

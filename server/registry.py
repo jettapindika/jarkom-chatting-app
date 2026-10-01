@@ -20,6 +20,7 @@ two can never drift.
 from __future__ import annotations
 
 from typing import Any, Iterator
+from util.timeutil import to_iso8601, utc_now
 
 __all__ = ["User", "UserRegistry"]
 
@@ -112,7 +113,7 @@ class UserRegistry:
         if nickname in self._by_nickname:
             return None
 
-        user = User(nickname, session, peer=peer)
+        user = User(nickname, session, joined_at=to_iso8601(utc_now()), peer=peer)
         self._by_nickname[nickname] = user
         return user
 

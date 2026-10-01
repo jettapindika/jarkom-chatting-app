@@ -88,7 +88,7 @@ class Receiver(threading.Thread):
                     # Silence, not failure. Either the server is merely quiet, or
                     # it is gone; the monitor is what tells the two apart, and it
                     # has been counting since the last inbound frame.
-                    if self._session.core.heartbeat.peer_expired:
+                    if self._session.core.heartbeat.peer_expired():
                         reason = "server tidak merespons (heartbeat timeout)"
                         break
                     if self._session.core.heartbeat.ping_due():

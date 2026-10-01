@@ -209,6 +209,16 @@ class Connection:
         """Whether the handshake has completed for this connection."""
         return self.user is not None and self.core.is_active
 
+    @property
+    def _poll_interval(self) -> float:
+        """How long the reader may wait before re-checking liveness.
+
+        Derived from the heartbeat policy rather than a magic number: the poll
+        and the deadline must agree, or the deadline is enforced late. The CLI's
+        reader thread derives its poll the same way.
+        """
+        return self.core.heartbeat.policy.interval
+
     # -- tasks ------------------------------------------------------------
 
     async def run(self) -> None:
@@ -329,10 +339,32 @@ class Connection:
     # -- reader -----------------------------------------------------------
 
     async def _reader_loop(self) -> None:
-        """Decapsulate inbound PDUs and dispatch them until the peer leaves."""
+        """Decapsulate inbound PDUs and dispatch them until the peer leaves.
+
+        The receive is bounded by the heartbeat interval, mirroring the CLI's
+        reader thread: on each quiet interval the session's liveness monitor
+        decides between "quiet" and "gone". Without this a peer that vanished
+        without a FIN/RST would hold its nickname and a client slot until the
+        kernel's own timeout -- hours -- expired.
+        """
         while not self.channel.is_closed:
             try:
-                frame = await self.channel.receive_frame()
+                frame = await asyncio.wait_for(
+                    self.channel.receive_frame(), timeout=self._poll_interval
+                )
+            except asyncio.TimeoutError:
+                # Silence, not failure. The monitor has been counting since
+                # the last inbound frame and tells quiet peers from dead ones.
+                monitor = self.core.heartbeat
+                if monitor.peer_expired():
+                    _log.info("client %s heartbeat expired; closing", self.nickname)
+                    self.enqueue(
+                        self._error(ErrorCode.HEARTBEAT_TIMEOUT, "no traffic within the timeout")
+                    )
+                    return
+                if monitor.ping_due():
+                    self.enqueue(make_message(MessageType.PING, {}, sender="server"))
+                continue
             except FrameTooLargeError:
                 # The frame boundary is no longer trustworthy: the announced
                 # size is still sitting in the stream and the next read would
@@ -406,6 +438,12 @@ class Connection:
 
         if message_type is MessageType.PING:
             self.enqueue(make_message(MessageType.PONG, {}, sender="server"))
+            return
+
+        if message_type is MessageType.PONG:
+            # A PONG needs no reply and no handler: the session's liveness
+            # monitor was touched while parsing the frame, which is the whole
+            # point of the probe.
             return
 
         if message_type not in CLIENT_TO_SERVER:
@@ -543,7 +581,16 @@ class Connection:
         return make_message(MessageType.ERROR, payload, sender="server")
 
     async def _writer_loop(self) -> None:
-        """Drain the outbound queue onto the socket, in order, until closed."""
+        """Drain the outbound queue onto the socket, in order, until closed.
+
+        A message that fails to encode is skipped, not fatal: its sibling
+        handler in the reader loop treats a malformed *inbound* frame as
+        recoverable, and one unsendable *outbound* message deserves the same
+        restraint. Returning here instead would leave the connection in the
+        roster with a dead writer -- a zombie that holds its nickname and a
+        client slot while never delivering another frame, which is strictly
+        worse than either dropping one message or dropping the connection.
+        """
         while True:
             message = await self.queue.get()
             if message is None:
@@ -560,8 +607,11 @@ class Connection:
                 # connection: dropping the user would hide the real fault.
                 _log.error("outbound frame too large for %s; message dropped", self.nickname)
             except Exception:  # noqa: BLE001
-                _log.exception("failed to send to %s", self.nickname)
-                return
+                # A message that cannot be built or written is a poison pill:
+                # skip it and keep serving the queue. If the socket itself is
+                # the problem, the next send raises ConnectionClosedError and
+                # ends this loop through the ordinary path.
+                _log.exception("dropping unsendable outbound message for %s", self.nickname)
 
 
 class ChatServer:

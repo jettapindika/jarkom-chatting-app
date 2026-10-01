@@ -23,7 +23,9 @@ __all__ = [
     "ENVELOPE_FIELDS",
     "MAX_NICKNAME_LENGTH",
     "MAX_TEXT_LENGTH",
+    "MIN_NICKNAME_LENGTH",
     "REQUIRED_FIELDS",
+    "extract_text",
     "is_valid_nickname",
     "validate_message",
 ]
@@ -136,8 +138,8 @@ def extract_text(payload: Mapping[str, Any], *, field: str = "text") -> str:
     """Pull a chat body out of ``payload``, validating its type and length.
 
     Raises:
-        SchemaViolation: if the field is absent, not a string, empty, or over
-            :data:`MAX_TEXT_LENGTH` characters.
+        SchemaViolation: if the field is absent, not a string, empty, not
+            representable in UTF-8, or over :data:`MAX_TEXT_LENGTH` characters.
     """
     if field not in payload:
         raise SchemaViolation(f"payload is missing '{field}'", field=field)
@@ -151,6 +153,18 @@ def extract_text(payload: Mapping[str, Any], *, field: str = "text") -> str:
         )
     if not value.strip():
         raise SchemaViolation(f"payload.{field} must not be empty", field=field)
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        # A lone surrogate passes ``isinstance(str)`` and every printable check,
+        # yet UTF-8 -- the wire encoding -- cannot represent it. Python's own
+        # decoders can produce such strings (``surrogateescape`` on the CLI, or
+        # a crafted JSON escape from a peer), so reject here, where it becomes
+        # an ordinary SchemaViolation instead of crashing the encoder later.
+        raise SchemaViolation(
+            f"payload.{field} contains characters not representable in UTF-8",
+            field=field,
+        ) from None
     if len(value) > MAX_TEXT_LENGTH:
         raise SchemaViolation(
             f"payload.{field} exceeds {MAX_TEXT_LENGTH} characters",

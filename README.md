@@ -272,7 +272,7 @@ terlihat, bukan sekadar diklaim.
 python -m unittest discover -s tests -t .
 ```
 
-Suite berisi 261 pengujian yang mencakup encode dan decode protokol, framing,
+Suite berisi 272 pengujian yang mencakup encode dan decode protokol, framing,
 handshake, urutan lapisan, registry user, jalur server, WebSocket, dan bridge.
 Tidak ada yang membutuhkan jaringan luar; semuanya berjalan di loopback atau
 tanpa socket sama sekali.
