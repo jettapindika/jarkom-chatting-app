@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 
-import { usersFrom, type Envelope } from "./messages";
+import { usersFrom, type Envelope, type TimelineEntry } from "./messages";
 import type { TraceEvent } from "./trace";
 
 /*
@@ -28,11 +28,27 @@ export type LinkState = "connecting" | "open" | "closed";
 /** Chat session on the other side of the bridge. */
 export type SessionState = "idle" | "connecting" | "connected" | "closed";
 
-/* A demo can run for an hour. Bound the buffers so a long session cannot grow
-   without limit; these are far more than anyone reads at once. */
-const MAX_LINES = 1000;
-const MAX_MESSAGES = 500;
+/* Bound the transcript so a long session cannot grow without limit. */
+const MAX_TIMELINE = 1000;
 const MAX_TRACES = 600;
+const VISIBLE_MESSAGE_TYPES: Record<string, true> = {
+  BROADCAST: true,
+  PRIVATE: true,
+  USER_LIST: true,
+  USER_JOIN: true,
+  USER_LEAVE: true,
+  NICK_OK: true,
+  ERROR: true,
+  DISCONNECT: true,
+};
+function isLocalActionLine(text: string): boolean {
+  return (
+    text.startsWith("Commands:\n") ||
+    text.startsWith("*** perintah tidak dikenal.") ||
+    text.startsWith("*** nickname tidak valid:")
+  );
+}
+
 
 export interface BridgeApi {
   url: string;
@@ -40,10 +56,8 @@ export interface BridgeApi {
   session: SessionState;
   nick: string;
   sessionId: string | null;
-  /** Lines the bridge already rendered, identical to the CLI client's output. */
-  lines: string[];
-  /** Structured envelopes, for anything that needs fields rather than text. */
-  messages: Envelope[];
+  /** One ordered, capped transcript of local lines and visible envelopes. */
+  timeline: TimelineEntry[];
   traces: TraceEvent[];
   users: string[];
   error: string | null;
@@ -62,13 +76,14 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<SessionState>("idle");
   const [nick, setNick] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [lines, setLines] = useState<string[]>([]);
-  const [messages, setMessages] = useState<Envelope[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [traces, setTraces] = useState<TraceEvent[]>([]);
   const [users, setUsers] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
+  const nicknameRef = useRef("");
+  const sequenceRef = useRef(0);
   /*
     Every socket gets a generation number. A frame from a socket that has since
     been replaced is ignored, which is what keeps a slow close during a
@@ -80,6 +95,13 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
     setter((previous) => {
       const next = [...previous, item];
       return next.length > cap ? next.slice(next.length - cap) : next;
+    });
+  }, []);
+
+  const appendTimeline = useCallback((entry: TimelineEntry) => {
+    setTimeline((previous) => {
+      const next = [...previous, entry];
+      return next.length > MAX_TIMELINE ? next.slice(next.length - MAX_TIMELINE) : next;
     });
   }, []);
 
@@ -96,20 +118,32 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
       switch (frame.type) {
         case "state": {
           const next = String(frame.state) as SessionState;
+          if (typeof frame.nick === "string") {
+            nicknameRef.current = frame.nick;
+            setNick(frame.nick);
+          }
+          if (next !== "connected") setUsers([]);
           setSession(next);
-          if (typeof frame.nick === "string") setNick(frame.nick);
           /* sessionId is present only once the handshake succeeded. */
           setSessionId(typeof frame.sessionId === "string" ? frame.sessionId : null);
           setError(null);
           break;
         }
         case "line": {
-          push(setLines, String(frame.text ?? ""), MAX_LINES);
+          const text = String(frame.text ?? "");
+          if (!isLocalActionLine(text)) break;
+          const sequence = sequenceRef.current++;
+          appendTimeline({ kind: "line", sequence, text });
           break;
         }
         case "message": {
           const envelope = frame.message as Envelope;
-          push(setMessages, envelope, MAX_MESSAGES);
+          if (VISIBLE_MESSAGE_TYPES[envelope.type] !== true) break;
+
+          const own = envelope.sender === nicknameRef.current;
+          const sequence = sequenceRef.current++;
+          appendTimeline({ kind: "message", sequence, message: envelope, own });
+
           if (envelope.type === "USER_LIST") {
             setUsers(usersFrom(envelope.payload));
           } else if (envelope.type === "USER_JOIN") {
@@ -124,6 +158,20 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
             if (typeof left === "string") {
               setUsers((previous) => previous.filter((name) => name !== left));
             }
+          } else if (envelope.type === "NICK_OK") {
+            const nextNick = envelope.payload.nick;
+            if (typeof nextNick === "string" && nextNick) {
+              const previousNick = nicknameRef.current;
+              nicknameRef.current = nextNick;
+              setNick(nextNick);
+              setUsers((previous) =>
+                previous.map((name) => (name === previousNick ? nextNick : name)),
+              );
+            }
+          } else if (envelope.type === "DISCONNECT") {
+            setUsers([]);
+            setSession("closed");
+            setSessionId(null);
           }
           break;
         }
@@ -139,7 +187,7 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
           break;
       }
     },
-    [push],
+    [appendTimeline, push],
   );
 
   const openSocket = useCallback(() => {
@@ -153,6 +201,7 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     setSession("idle");
     setSessionId(null);
+    setUsers([]);
 
     let socket: WebSocket;
     try {
@@ -236,8 +285,7 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
       session,
       nick,
       sessionId,
-      lines,
-      messages,
+      timeline,
       traces,
       users,
       error,
@@ -253,8 +301,7 @@ export function BridgeProvider({ children }: { children: React.ReactNode }) {
       session,
       nick,
       sessionId,
-      lines,
-      messages,
+      timeline,
       traces,
       users,
       error,

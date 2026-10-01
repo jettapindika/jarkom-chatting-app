@@ -3,60 +3,124 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useBridge } from "@/lib/bridge";
+import { formatMessageTime, systemMessageText, textFrom } from "@/lib/messages";
 
 /**
- * The transcript.
- *
- * The bridge already rendered each line through the same `format_message` the
- * CLI client uses, so this shows exactly what a terminal user would see rather
- * than a second, drifting rendering.
+ * The transcript. Chat bubbles come from structured envelopes the bridge
+ * sends, not from parsing the CLI-rendered lines. Local bridge output with no
+ * envelope (help text, rejected nicknames) appears as plain lines in the
+ * same timeline.
  */
 export function MessageLog() {
   const bridge = useBridge();
-  const endRef = useRef<HTMLDivElement>(null);
-  const count = bridge.lines.length;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const followingRef = useRef(true);
+  const [awayFromEnd, setAwayFromEnd] = useState(false);
+  const lastSequence = bridge.timeline.at(-1)?.sequence;
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [count]);
+    const container = scrollRef.current;
+    if (container && followingRef.current) container.scrollTop = container.scrollHeight;
+  }, [lastSequence]);
 
   return (
-    <section
-      aria-label="Percakapan"
-      className="min-h-0 flex-1 overflow-y-auto border border-control-line bg-surface px-3 py-3"
-    >
-      {count === 0 ? (
-        <p className="text-sm text-muted">
-          Belum ada pesan. Setelah masuk, tulis apa saja dan tekan Enter, atau
-          mulai dengan <code className="font-mono">/help</code> untuk melihat
-          perintah yang tersedia.
-        </p>
-      ) : (
-        <ol className="space-y-0.5">
-          {bridge.lines.map((line, index) => (
-            /* Lines have no identity of their own and are append-only, so the
-               index is stable for the lifetime of this list. */
-            <li
-              key={index}
-              className="whitespace-pre-wrap break-words font-mono text-sm leading-relaxed"
-            >
-              {line}
-            </li>
-          ))}
-        </ol>
-      )}
-      <div ref={endRef} />
-    </section>
+    <div className="transcript-wrap">
+      <div
+        ref={scrollRef}
+        className="transcript"
+        role="log"
+        aria-label="Percakapan"
+        aria-relevant="additions text"
+        tabIndex={0}
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          const following = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+          followingRef.current = following;
+          setAwayFromEnd(!following);
+        }}
+      >
+        {bridge.timeline.length === 0 ? (
+          <div className="transcript-empty">
+            <div className="empty-mark" aria-hidden>#</div>
+            <h2>Obrolan dimulai di sini.</h2>
+            <p>
+              {bridge.session === "connected"
+                ? "Kirim pesan pertamamu. Semua user yang terhubung akan menerimanya."
+                : "Pilih nickname dan masuk untuk mengirim pesan ke teman yang terhubung."}
+            </p>
+          </div>
+        ) : (
+          <ol className="transcript-list">
+            {bridge.timeline.map((entry) => {
+              if (entry.kind === "line") {
+                return (
+                  <li key={entry.sequence} className="system-row local-output">
+                    <pre>{entry.text}</pre>
+                  </li>
+                );
+              }
+
+              const message = entry.message;
+              if (message.type !== "BROADCAST" && message.type !== "PRIVATE") {
+                return (
+                  <li key={entry.sequence} className={`system-row${message.type === "ERROR" ? " is-error" : ""}`}>
+                    {systemMessageText(message)}
+                  </li>
+                );
+              }
+
+              const privateMessage = message.type === "PRIVATE";
+              const incomingPrivate = privateMessage && !entry.own && !("to" in message.payload);
+              const target = typeof message.payload.to === "string" ? message.payload.to : "";
+
+              return (
+                <li key={entry.sequence} className={`message-row${entry.own ? " is-own" : ""}`}>
+                  {!entry.own ? <span className="avatar" aria-hidden>{message.sender.slice(0, 2)}</span> : null}
+                  <div className="message-content">
+                    <div className="message-meta">
+                      <span className="message-sender">{entry.own ? "Kamu" : message.sender}</span>
+                    </div>
+                    <div className="message-bubble">
+                      {privateMessage ? (
+                        <span className="private-label">
+                          {incomingPrivate ? "Pesan pribadi untuk kamu" : target ? `Pribadi ke ${target}` : "Pesan pribadi"}
+                        </span>
+                      ) : null}
+                      <p>{textFrom(message.payload)}</p>
+                      <p className="message-time">
+                        <time dateTime={message.timestamp} title={message.timestamp}>{formatMessageTime(message.timestamp)}</time>
+                      </p>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+      {awayFromEnd ? (
+        <button
+          type="button"
+          className="button-secondary jump-latest"
+          onClick={() => {
+            const container = scrollRef.current;
+            followingRef.current = true;
+            if (container) container.scrollTop = container.scrollHeight;
+            setAwayFromEnd(false);
+          }}
+        >
+          Ke pesan terbaru ↓
+        </button>
+      ) : null}
+    </div>
   );
 }
 
-/** Command input, with the same Up/Down history as the CLI client. */
 export function CommandInput() {
   const bridge = useBridge();
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [cursor, setCursor] = useState(-1);
-
   const connected = bridge.session === "connected";
 
   function onSubmit(event: React.FormEvent) {
@@ -73,14 +137,12 @@ export function CommandInput() {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     if (history.length === 0) return;
     event.preventDefault();
-
     if (event.key === "ArrowUp") {
       const next = cursor === -1 ? history.length - 1 : Math.max(0, cursor - 1);
       setCursor(next);
       setValue(history[next]);
       return;
     }
-
     if (cursor === -1) return;
     const next = cursor + 1;
     if (next >= history.length) {
@@ -93,29 +155,35 @@ export function CommandInput() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex items-center gap-2">
-      <label htmlFor="command" className="sr-only">
-        Pesan atau perintah
-      </label>
-      <input
-        id="command"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={onKeyDown}
-        disabled={!connected}
-        autoComplete="off"
-        placeholder={
-          connected ? "Tulis pesan, atau /help" : "Masuk dulu untuk menulis"
-        }
-        className="min-w-0 flex-1 rounded-sm border border-control-line bg-surface px-3 py-2 font-mono text-sm placeholder:font-sans placeholder:text-muted disabled:opacity-60"
-      />
-      <button
-        type="submit"
-        disabled={!connected || value.trim().length === 0}
-        className="rounded-sm border border-control-line px-4 py-2 text-sm transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
-      >
-        Kirim
-      </button>
+    <form onSubmit={onSubmit} className="composer">
+      <div className="composer-field">
+        <label htmlFor="command" className="sr-only">Pesan atau perintah</label>
+        <input
+          id="command"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={!connected}
+          autoComplete="off"
+          placeholder={connected ? "Tulis pesan, atau /help…" : "Masuk dulu untuk menulis"}
+          aria-describedby="composer-hint"
+        />
+        <button
+          type="submit"
+          disabled={!connected || value.trim().length === 0}
+          className="button-primary send-button"
+          aria-label="Kirim pesan"
+          title="Kirim pesan"
+        >
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m4 4 17 8-17 8 3-8-3-8Z M7 12h14" />
+          </svg>
+        </button>
+      </div>
+      <div className="composer-hint" id="composer-hint">
+        <span><kbd>Enter</kbd> untuk kirim · <kbd>↑ ↓</kbd> riwayat input</span>
+        <span>TCP / Jarkom</span>
+      </div>
     </form>
   );
 }

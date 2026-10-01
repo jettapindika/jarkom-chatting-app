@@ -1,74 +1,68 @@
 "use client";
 
-import {
-  ConnectBar,
-  ErrorNotice,
-  LinkNotice,
-  Roster,
-} from "@/components/ConnectBar";
+import Link from "next/link";
+
+import { ConnectBar, ErrorNotice, LinkNotice, Roster } from "@/components/ConnectBar";
 import { CommandInput, MessageLog } from "@/components/MessageLog";
 import { useBridge } from "@/lib/bridge";
 
-/*
-  The chat screen is one workspace: connect at the top, transcript in the
-  middle, command box under it, roster on the side. Everything a session needs
-  is on one screen, because a chat client that hides its roster behind a tab is
-  hiding the one piece of state the user keeps checking.
-*/
 export default function ChatPage() {
   const bridge = useBridge();
+  const connected = bridge.session === "connected";
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-3 border border-control-line bg-surface px-3 py-3">
-        <ConnectBar />
-        <LinkNotice />
-        <ErrorNotice />
-      </div>
+    <div className="chat-workspace">
+      <aside className="chat-sidebar" aria-label="Sesi dan user aktif">
+        <section className="panel session-panel" aria-labelledby="session-heading">
+          <div className="session-heading">
+            <h2 id="session-heading">{connected ? "Sesi kamu" : "Ikut percakapan"}</h2>
+            <p>{connected ? "Terhubung ke ruang bersama." : "Satu nickname, lalu mulai ngobrol."}</p>
+          </div>
+          <ConnectBar />
+        </section>
+        <div className="panel roster-panel"><Roster /></div>
+      </aside>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_15rem]">
-        <div className="flex h-[60vh] min-h-0 flex-col gap-2">
-          <MessageLog />
-          <CommandInput />
-        </div>
-
-        <aside className="border border-control-line bg-surface px-3 py-3">
-          <Roster />
-
-          <h2 className="mt-4 text-xs font-semibold text-muted">Perintah</h2>
-          <dl className="mt-2 space-y-1.5 text-sm">
-            {[
-              ["/nick <nama>", "ganti nickname"],
-              ["/list", "lihat user aktif"],
-              ["/msg <user> <pesan>", "pesan pribadi"],
-              ["/help", "semua perintah"],
-              ["/quit", "keluar"],
-            ].map(([command, meaning]) => (
-              <div key={command}>
-                <dt className="font-mono text-xs">{command}</dt>
-                <dd className="text-xs text-muted">{meaning}</dd>
-              </div>
-            ))}
-          </dl>
-
-          <p className="mt-4 text-xs text-muted">
-            Lapisan 7 sampai 4 dari tiap pesan bisa dilihat di{" "}
-            <a
-              href="/visualizer"
-              className="underline underline-offset-2 hover:text-ink"
-            >
-              Visualizer OSI
-            </a>
-            .
+      <section className="chat-column" aria-labelledby="chat-title">
+        <header className="chat-heading">
+          <span className="chat-heading-mark" aria-hidden>#</span>
+          <div>
+            <h1 className="chat-title" id="chat-title">Ruang bersama</h1>
+            <p className="chat-subtitle">Pesan ke semua user · pesan pribadi lewat /msg</p>
+          </div>
+          <p className="chat-heading-state">
+            <span className={`status-dot${connected ? " is-connected" : ""}`} aria-hidden />
+            {connected ? "Terhubung" : "Belum masuk"}
           </p>
+        </header>
+        <div className="chat-notices"><LinkNotice /><ErrorNotice /></div>
+        <MessageLog />
+        <CommandInput />
+      </section>
 
-          {bridge.link !== "open" ? null : bridge.session !== "connected" ? (
-            <p className="mt-4 text-xs text-muted">
-              Kamu belum masuk, jadi perintah masih terkunci.
-            </p>
-          ) : null}
-        </aside>
-      </div>
+      <aside className="panel guide-panel" aria-labelledby="guide-title">
+        <h2 id="guide-title" className="guide-title">Sedikit jalan pintas.</h2>
+        <p className="guide-description">Ketik pesan untuk semua orang, atau pakai perintah ini.</p>
+        <dl className="command-guide">
+          {[
+            ["/msg <user> <pesan>", "Kirim pesan hanya ke user tujuan."],
+            ["/nick <nama>", "Ganti nickname dalam sesi ini."],
+            ["/list", "Lihat daftar user yang online."],
+            ["/help", "Tampilkan bantuan di percakapan."],
+            ["/quit", "Akhiri sesi chat kamu."],
+          ].map(([command, meaning]) => (
+            <div key={command}>
+              <dt>{command}</dt>
+              <dd>{meaning}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="guide-footer">
+          <p>Ingin melihat apa yang lewat di jaringan?</p>
+          <Link href="/visualizer">Buka Visualizer OSI</Link>
+          <p>Ikuti pesan di lapisan aplikasi, presentasi, sesi, dan transport.</p>
+        </div>
+      </aside>
     </div>
   );
 }

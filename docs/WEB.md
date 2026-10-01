@@ -84,7 +84,7 @@ dengan klien terminal, jadi aturan perintah hanya ada di satu tempat.
 | --- | --- | --- |
 | `state` | `state`, `nick`, `sessionId` | Perubahan status sesi chat |
 | `line` | `text` | Satu baris siap tampil, sudah dirender bridge |
-| `message` | `message` | Amplop terstruktur, untuk yang butuh field bukan teks |
+| `message` | `message` | Amplop terstruktur; web merender percakapan dari sini |
 | `trace` | `event` | Satu peristiwa lapisan |
 | `error` | `message` | Kesalahan yang perlu dilihat user |
 
@@ -92,11 +92,12 @@ Nilai `state` adalah `connecting`, `connected`, atau `closed`. Field `sessionId`
 **hanya ada** saat `connected`, karena id sesi baru diberikan server setelah
 handshake berhasil.
 
-`line` dan `message` membawa hal yang sama dalam dua bentuk. `line` untuk
-ditampilkan apa adanya, karena renderernya sudah ada di `app.chat_logic` dan
-dipakai bersama klien terminal. `message` untuk dibaca field-nya, karena
-memaksa sisi web mengurai ulang teks yang sudah dirender berarti menulis parser
-kedua.
+`line` dan `message` membawa trafik yang sama dalam dua bentuk. `line` adalah
+render teks dari `app.chat_logic`, tetap dipakai klien terminal apa adanya.
+Sisi web kini merender percakapan dari `message` (field-nya) dan mengabaikan
+`line` remote: menampilkan keduanya berarti setiap pesan tampil dua kali. Yang
+masih dipakai web dari `line` hanya output lokal bridge yang tidak punya
+amplop: isi `/help`, penolakan nickname, dan perintah tak dikenal.
 
 ### Peristiwa lapisan
 
@@ -232,13 +233,13 @@ web/
 │   └── visualizer/page.tsx  Visualizer lapisan
 ├── components/
 │   ├── ConnectBar.tsx       Form konek, daftar user, pemberitahuan error
-│   ├── MessageLog.tsx       Transkrip dan input perintah
+│   ├── MessageLog.tsx       Transkrip bubble dan input perintah
 │   ├── SiteNav.tsx          Navigasi antar halaman
 │   ├── ThemeToggle.tsx      Sakelar tema
 │   └── TraceLadder.tsx      Tangga lapisan per pesan
 └── lib/
-    ├── bridge.tsx           Provider dan hook useBridge
-    ├── messages.ts          Bentuk amplop dan pembacaan daftar user
+    ├── bridge.tsx           Provider, hook useBridge, timeline transkrip
+    ├── messages.ts          Bentuk amplop, waktu, dan notis sistem
     └── trace.ts             Bentuk peristiwa, warna lapisan, pengelompokan
 ```
 

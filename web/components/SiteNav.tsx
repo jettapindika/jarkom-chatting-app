@@ -14,16 +14,17 @@ export function SiteNav() {
   const pathname = usePathname();
 
   return (
-    <header className="border-b border-line">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3 sm:px-6">
-        <span className="text-sm font-semibold">
-          Jarkom Chat
-          <span className="ml-2 font-normal text-muted">
-            socket TCP, protokol sendiri
-          </span>
-        </span>
+    <header className="site-header">
+      <div className="site-header-inner">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden>j.</span>
+          <div>
+            <p className="brand-name">jarkom<span className="font-normal text-muted"> / chat</span></p>
+            <p className="brand-caption">Percakapan lewat socket TCP</p>
+          </div>
+        </div>
 
-        <nav aria-label="Halaman" className="flex items-center gap-1">
+        <nav aria-label="Halaman" className="page-nav">
           {LINKS.map((link) => {
             const active = pathname === link.href;
             return (
@@ -31,19 +32,16 @@ export function SiteNav() {
                 key={link.href}
                 href={link.href}
                 aria-current={active ? "page" : undefined}
-                className={`rounded-sm px-3 py-1.5 text-sm transition-colors ${
-                  active
-                    ? "text-ink underline decoration-accent decoration-2 underline-offset-4"
-                    : "text-muted hover:text-ink"
-                }`}
+                className={active ? "nav-active" : undefined}
               >
+                <span className="nav-symbol" aria-hidden>{link.href === "/" ? "#" : "≋"}</span>
                 {link.label}
               </Link>
             );
           })}
         </nav>
 
-        <div className="ml-auto">
+        <div className="theme-toggle">
           <ThemeToggle />
         </div>
       </div>

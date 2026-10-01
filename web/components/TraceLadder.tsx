@@ -16,12 +16,11 @@ import {
 } from "@/lib/trace";
 
 const DIRECTION_TEXT: Record<Direction, string> = {
-  outbound: "dikirim ke server",
-  inbound: "diterima dari server",
+  outbound: "keluar ke server",
+  inbound: "masuk dari server",
 };
 
-/* The arrow states which way the PDU travels, which is the fact the ladder
-   exists to show. It is a data-flow marker, not a button ornament. */
+/* The arrow marks packet direction, which is the ladder's data signal. */
 const DIRECTION_ARROW: Record<Direction, string> = {
   outbound: "\u2191",
   inbound: "\u2193",
@@ -33,21 +32,17 @@ function LayerRow({ event, last }: { event: TraceEvent; last: boolean }) {
 
   return (
     <li className="flex gap-3">
-      {/* The rail: a swatch in the layer's series color, linked to the next
-          layer by a hairline. The color is the legend key, not decoration. */}
       <span aria-hidden className="relative flex w-3 shrink-0 justify-center">
-        {last ? null : (
-          <span className="absolute inset-y-0 w-px bg-line" />
-        )}
+        {last ? null : <span className="absolute inset-y-0 w-px bg-line" />}
         <span
-          className="relative mt-[5px] h-2.5 w-2.5 shrink-0 rounded-[2px]"
+          className="relative mt-1.5 h-2.5 w-2.5 shrink-0 rounded-[2px]"
           style={{ background: color }}
         />
       </span>
 
-      <div className="min-w-0 flex-1 pb-2.5">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="font-mono text-xs" style={{ color }}>
+      <div className="min-w-0 flex-1 pb-4">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-mono text-xs font-semibold" style={{ color }}>
             L{event.layer}
           </span>
           <span className="text-xs text-muted">{LAYER_LABEL[event.layer]}</span>
@@ -57,20 +52,20 @@ function LayerRow({ event, last }: { event: TraceEvent; last: boolean }) {
           </span>
         </div>
 
-        <p className="mt-0.5 break-words text-sm">{event.summary}</p>
+        <p className="mt-1 break-words text-sm leading-5">{event.summary}</p>
 
         {event.payloadPreview ? (
-          <p className="mt-0.5 break-words font-mono text-xs text-muted">
+          <p className="mt-1 break-all font-mono text-xs leading-5 text-muted">
             {event.payloadPreview}
           </p>
         ) : null}
 
         {event.payloadHex ? (
           <details className="mt-1">
-            <summary className="cursor-pointer text-xs text-muted hover:text-ink">
-              byte
+            <summary className="flex min-h-11 cursor-pointer items-center text-xs text-muted underline decoration-line underline-offset-4 hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+              Lihat byte
             </summary>
-            <p className="mt-1 break-all font-mono text-xs leading-relaxed text-muted">
+            <p className="break-all font-mono text-xs leading-relaxed text-muted">
               {event.payloadHex}
             </p>
           </details>
@@ -95,25 +90,29 @@ function TraceGroupCard({
   totalBytes: number;
 }) {
   return (
-    <li className="border border-control-line bg-surface px-3 py-2.5">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-line pb-2">
-        <span className="font-mono text-xs text-accent">
-          {DIRECTION_ARROW[direction]} {DIRECTION_TEXT[direction]}
-        </span>
-        <span className="font-mono text-xs tabular-nums text-muted">
-          {formatClock(timestamp)}
-        </span>
-        <span className="font-mono text-xs text-muted" title={traceId}>
-          {shortId(traceId)}
-        </span>
-        {totalBytes > 0 ? (
-          <span className="ml-auto font-mono text-xs tabular-nums text-muted">
-            {formatBytes(totalBytes)} di lapisan Transport
-          </span>
-        ) : null}
-      </div>
+    <li className="panel rounded-[14px] border border-line p-4 sm:p-5">
+      <header className="flex flex-wrap items-start gap-x-3 gap-y-2 border-b border-line pb-3">
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-xs font-semibold text-accent">
+            {DIRECTION_ARROW[direction]} {DIRECTION_TEXT[direction]}
+          </p>
+          <p className="mt-1 break-all font-mono text-xs text-muted" title={traceId}>
+            Jejak {shortId(traceId)}
+          </p>
+        </div>
+        <div className="text-left sm:text-right">
+          <p className="font-mono text-xs tabular-nums text-muted">
+            {formatClock(timestamp)}
+          </p>
+          {totalBytes > 0 ? (
+            <p className="mt-1 font-mono text-xs tabular-nums text-muted">
+              {formatBytes(totalBytes)} di Transport
+            </p>
+          ) : null}
+        </div>
+      </header>
 
-      <ol className="mt-2">
+      <ol className="mt-4">
         {events.map((event, index) => (
           <LayerRow
             key={`${event.layer}-${index}`}
@@ -134,15 +133,13 @@ function LayerTotals({ traces }: { traces: TraceEvent[] }) {
   }
 
   return (
-    <dl className="flex flex-wrap gap-x-6 gap-y-1">
+    <dl className="flex flex-wrap gap-x-5 gap-y-2">
       {LAYER_ORDER.map((layer) => (
         <div key={layer} className="flex items-baseline gap-2">
-          <dt className="font-mono text-xs" style={{ color: LAYER_COLOR[layer] }}>
+          <dt className="font-mono text-xs font-semibold" style={{ color: LAYER_COLOR[layer] }}>
             L{layer}
           </dt>
-          <dd className="font-mono text-sm tabular-nums">
-            {totals.get(layer) ?? 0}
-          </dd>
+          <dd className="font-mono text-sm tabular-nums">{totals.get(layer) ?? 0}</dd>
         </div>
       ))}
     </dl>
@@ -155,52 +152,55 @@ export function TraceLadder() {
   const groups = groupByTrace(bridge.traces).reverse();
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-3 border border-control-line bg-surface px-3 py-2.5">
-        <div>
-          <h2 className="text-sm font-semibold">Event per lapisan</h2>
-          <div className="mt-1.5">
+    <section className="space-y-4" aria-labelledby="trace-heading">
+      <header className="panel rounded-[14px] border border-line p-4 sm:p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-2">
+            <p className="section-label">Paket nyata dari sesi</p>
+            <h2 id="trace-heading" className="text-lg font-semibold tracking-tight">
+              Tangga jejak
+            </h2>
             <LayerTotals traces={bridge.traces} />
           </div>
-        </div>
 
-        <div className="text-right">
-          <button
-            type="button"
-            onClick={bridge.clearTraces}
-            disabled={bridge.traces.length === 0}
-            className="rounded-sm border border-control-line px-3 py-1.5 text-xs transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
-          >
-            Kosongkan
-          </button>
-          <p className="mt-1 text-xs text-muted">
-            {bridge.traces.length} event, {groups.length} pesan
-          </p>
+          <div className="flex items-center gap-3 sm:flex-col sm:items-end sm:gap-2">
+            <button
+              type="button"
+              onClick={bridge.clearTraces}
+              disabled={bridge.traces.length === 0}
+              className="button-secondary min-h-11 px-4 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Kosongkan
+            </button>
+            <p className="text-xs text-muted">
+              {bridge.traces.length} kejadian, {groups.length} pesan
+            </p>
+          </div>
         </div>
-      </div>
+      </header>
 
-      <dl className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+      <dl className="panel grid gap-x-6 gap-y-3 rounded-[14px] border border-line p-4 sm:grid-cols-2 sm:p-5">
         {LAYER_ORDER.map((layer) => (
-          <div key={layer} className="flex items-baseline gap-2">
-            <dt className="font-mono text-xs" style={{ color: LAYER_COLOR[layer] }}>
-              L{layer}
+          <div key={layer} className="min-w-0">
+            <dt className="font-mono text-xs font-semibold" style={{ color: LAYER_COLOR[layer] }}>
+              L{layer} {LAYER_LABEL[layer]}
             </dt>
-            <dd className="text-xs text-muted">
-              <span className="text-ink">{LAYER_LABEL[layer]}</span>:{" "}
-              {LAYER_ROLE[layer]}
-            </dd>
+            <dd className="mt-1 text-xs leading-5 text-muted">{LAYER_ROLE[layer]}</dd>
           </div>
         ))}
       </dl>
 
       {groups.length === 0 ? (
-        <p className="border border-control-line bg-surface px-3 py-6 text-sm text-muted">
-          Belum ada event. Setiap perintah yang kamu kirim melewati empat
-          lapisan, dan setiap lapisan melaporkan apa yang dilakukannya di sini.
-          Lapisan 3 sampai 1 dipegang sistem operasi, jadi tidak muncul.
-        </p>
+        <div className="panel rounded-[14px] border border-line p-5 sm:p-6">
+          <p className="text-sm font-medium">Belum ada jejak sesi.</p>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-muted">
+            Hubungkan sesi, lalu kirim pesan di Ruang chat. Kartu trace akan
+            muncul setelah bridge menerima event dari pesan yang benar-benar
+            berpindah.
+          </p>
+        </div>
       ) : (
-        <ol className="space-y-3">
+        <ol className="space-y-4">
           {groups.map((group) => (
             <TraceGroupCard
               key={group.traceId}
@@ -213,6 +213,6 @@ export function TraceLadder() {
           ))}
         </ol>
       )}
-    </div>
+    </section>
   );
 }
