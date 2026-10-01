@@ -25,7 +25,7 @@ Daftar isi:
 | Unit test otomatis | 261 pengujian, 11 modul | Lulus semua |
 | Skenario manual | 7 skenario, 10 pemeriksaan | 10/10 lulus |
 | Stress test | 50 klien bersamaan | 50/50 terhubung, 0 gagal |
-| Verifikasi byte | 3 tipe frame di kabel | Sesuai spesifikasi |
+| Verifikasi byte | 4 tipe frame di kabel | Sesuai spesifikasi |
 | Shutdown rapi | Jalur langsung dan jalur Ctrl+C | Farewell sampai ke klien |
 | Klien web | Halaman `/` dan `/visualizer` | Render benar, tanpa overflow |
 
@@ -84,7 +84,7 @@ Rincian per modul:
 | `test_session` | 30 | Identitas sesi, nomor urut PDU, deteksi urutan salah, heartbeat |
 | `test_channel` | 26 | Baca tulis byte stream, partial read, timeout, penutupan |
 | `test_server` | 30 | Registry, broadcast, pesan pribadi, jalur error, shutdown |
-| `test_session` / `test_stack` | 20 | Keempat lapisan dirangkai, urutan peristiwa L4 sampai L7 |
+| `test_stack` | 20 | Keempat lapisan dirangkai, urutan peristiwa L4 sampai L7 |
 | `test_trace` | 30 | Emitter, sink, urutan peristiwa per arah |
 | `test_websocket` | 19 | Handshake RFC 6455, framing, masking, frame terpecah |
 | `test_handshake` | 18 | CONNECT, CONNECT_OK, CONNECT_ERR, penolakan nickname |
@@ -200,7 +200,7 @@ terlihat.
 python tools/frame_dump.py --port 9009 --nick dumper
 ```
 
-Tiga tipe frame yang terverifikasi:
+Empat tipe frame yang terverifikasi:
 
 | Frame | Arah | Panjang total | Prefix L4 | Session id L5 | Urutan L5 | Badan L6 |
 | --- | --- | --- | --- | --- | --- | --- |

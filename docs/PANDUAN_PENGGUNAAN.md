@@ -115,10 +115,12 @@ akan menanyakannya lebih dulu. Setelah berhasil, yang muncul adalah:
 ```
 *** terhubung ke 127.0.0.1:9009 sebagai budi (session 3f2a91c4)
 *** ketik /help untuk daftar perintah, /quit untuk keluar
-*** 1 user online:
+> *** 1 user online:
     - budi
-budi>
 ```
+
+Tanda `> ` di awal baris adalah prompt tempat kamu mengetik. Prompt itu muncul
+lebih dulu, lalu daftar user menyusul dari server.
 
 Sekarang kamu bisa langsung mengetik pesan dan menekan Enter.
 
@@ -201,8 +203,11 @@ Orang ketiga tidak menerima pesan ini sama sekali. Kalau nama tujuannya salah
 atau orangnya sudah keluar, server akan menjawab:
 
 ```
-*** error [NO_SUCH_USER] tidak ada user bernama 'siti'
+*** error [NO_SUCH_USER] no such user: 'siti'
 ```
+
+Teks setelah kode berasal dari server apa adanya, jadi bahasanya Inggris,
+sementara nasihat untuk pengguna ditulis dalam bahasa Indonesia di tempat lain.
 
 ### Mengganti nickname
 
@@ -257,7 +262,7 @@ Kalau ada yang mencoba memakai nickname yang sudah dipakai, klien itu ditolak
 dan langsung keluar dengan pesan:
 
 ```
-*** gagal terhubung: server rejected connection: NICK_TAKEN ('budi' is already in use)
+*** gagal terhubung: nickname sudah dipakai user lain, coba nickname lain
 ```
 
 Server tetap melayani yang lain. Yang ditolak hanya klien yang mencoba memakai
@@ -401,11 +406,25 @@ Pesan error dari server selalu diawali `*** error [KODE]`. Berikut artinya:
 | `TEXT_TOO_LONG` | Pesan melebihi batas panjang | Potong pesannya |
 | `FRAME_TOO_LARGE` | Satu frame melebihi 64 KiB | Kirim dalam beberapa bagian |
 | `MALFORMED` | Frame tidak sesuai format protokol | Biasanya bug, bukan kesalahan pemakaian |
-| `SERVER_FULL` | Server sudah mencapai batas `--max-clients` | Tunggu sampai ada yang keluar |
 | `PROTOCOL_MISMATCH` | Versi protokol klien tidak cocok dengan server | Pastikan klien dan server dari sumber yang sama |
+| `UNEXPECTED_TYPE` | Tipe pesan dikirim pada saat yang salah, misalnya pesan biasa sebelum handshake | Biasanya bug |
 | `UNKNOWN_TYPE` | Tipe pesan tidak dikenal server | Biasanya bug |
 | `NOT_AUTHENTICATED` | Ada pesan dikirim sebelum handshake selesai | Biasanya bug |
-| `INTERNAL` | Kesalahan di sisi server | Lihat log server untuk detailnya |
+
+Teks setelah kode berasal dari server dan tidak diterjemahkan, jadi isinya
+bahasa Inggris. Kode itu sendiri yang stabil untuk dipakai bercabang.
+
+Dua kode terdefinisi di protokol tetapi tidak pernah benar-benar dikirim, jadi
+tidak ada di tabel di atas: `SERVER_FULL` dan `INTERNAL`. Server yang sudah
+mencapai batas `--max-clients` tidak mengirim pesan apa pun, melainkan langsung
+memutus socket sebelum handshake dijawab. Yang kamu lihat di klien adalah:
+
+```
+*** gagal terhubung: koneksi ke 127.0.0.1:9009 terputus saat handshake: connection closed by peer
+```
+
+Kalau muncul pesan seperti itu padahal server jelas hidup, periksa apakah
+jumlah klien sudah menyentuh `--max-clients`.
 
 Error dari sisi klien, bukan dari server, diawali `***` tanpa kode:
 
@@ -432,8 +451,10 @@ Server belum jalan, atau alamat dan portnya berbeda.
 ### Nickname ditolak terus
 
 Nickname itu masih dipakai koneksi lain yang belum benar-benar putus. Tunggu
-sekitar 15 detik sampai heartbeat server menyadari koneksi itu sudah mati, lalu
-coba lagi. Kalau perlu segera, pakai nickname lain dulu.
+sekitar 45 detik sampai heartbeat server menyadari koneksi itu sudah mati, lalu
+coba lagi. Kalau perlu segera, pakai nickname lain dulu. Angka 45 detik itu
+tiga kali interval heartbeat bawaan; kalau server dijalankan dengan
+`--heartbeat-interval` yang lebih kecil, waktunya ikut memendek.
 
 ### Pesan tidak sampai ke orang lain
 

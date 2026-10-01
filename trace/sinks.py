@@ -82,8 +82,8 @@ class JsonLinesTraceSink:
 class FanoutTraceSink:
     """Broadcasts each event to several sinks.
 
-    The bridge uses this to feed its ``/ws/trace`` subscribers *and* its own
-    log file from a single emission, so the two can never disagree.
+    The bridge uses this to feed its WebSocket subscriber *and* its own
+    stderr printer from a single emission, so the two can never disagree.
     """
 
     __slots__ = ("_sinks",)

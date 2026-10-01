@@ -4,7 +4,8 @@ Every layer in the stack (L4-L7) emits :class:`TraceEvent` objects through a
 :class:`~trace.emitter.TraceEmitter`. Two consumers read those events:
 
 * the CLI ``--trace`` printer, and
-* the web visualizer, which receives them over ``/ws/trace``.
+* the web visualizer, which receives them over the bridge's single WebSocket
+  as ``{"type": "trace", ...}`` frames.
 
 Both consume the *same* event objects produced by the *same* emitter. There is
 deliberately no second tracing path: if the visualizer shows something the CLI
@@ -120,7 +121,7 @@ class TraceEvent:
         """Serialise to the JSON shape the visualizer consumes.
 
         Field names are camelCase here on purpose: this dict is what crosses
-        the ``/ws/trace`` WebSocket, so it is a wire format, not an internal
+        the bridge's WebSocket, so it is a wire format, not an internal
         Python structure.
         """
         return {
